@@ -17,30 +17,35 @@ namespace QlikChartReorienter
             var appIds = location.AppsWithNameOrDefault("ComboChartReorienter");
             foreach (var appIdentifier in appIds)
             {
-                using (var app = location.App(appIdentifier))
-                {
-                    var infos = app.GetAllInfos();
-                    var combocharts = infos.Where(i => i.Type == "combochart").ToArray();
-                    Console.WriteLine($"Found {combocharts.Length} combo charts");
-                    foreach (var combochart in combocharts)
-                    {
-                        var o = app.GetGenericObject(combochart.Id);
-                        var extendsId = o.Properties.ExtendsId;
-                        if (!string.IsNullOrEmpty(extendsId))
-                            o = app.GetGenericObject(extendsId);
-
-                        var p = o.GetProperties().As<CombochartProperties>();
-                        if (p.Orientation == Orientation.Horizontal)
-                        {
-                            Console.WriteLine($"Changing {(string.IsNullOrEmpty(extendsId) ? "chart" : "master object")} to vertical: " + p.Info.Id);
-                            p.Orientation = Orientation.Vertical;
-                            // o.SetProperties(p);
-                        }
-                    }
-
-                    app.DoSave();
-                }
+                ReorientForApp(location, appIdentifier);
             }
         }
-	}
+
+        private static void ReorientForApp(ILocation location, IAppIdentifier appIdentifier)
+        {
+            using (var app = location.App(appIdentifier))
+            {
+                var infos = app.GetAllInfos();
+                var combocharts = infos.Where(i => i.Type == "combochart").ToArray();
+                Console.WriteLine($"Found {combocharts.Length} combo charts");
+                foreach (var combochart in combocharts)
+                {
+                    var o = app.GetGenericObject(combochart.Id);
+                    var extendsId = o.Properties.ExtendsId;
+                    if (!string.IsNullOrEmpty(extendsId))
+                        o = app.GetGenericObject(extendsId);
+
+                    var p = o.GetProperties().As<CombochartProperties>();
+                    if (p.Orientation == Orientation.Horizontal)
+                    {
+                        Console.WriteLine($"Changing {(string.IsNullOrEmpty(extendsId) ? "chart" : "master object")} to vertical: " + p.Info.Id);
+                        p.Orientation = Orientation.Vertical;
+                        // o.SetProperties(p);
+                    }
+                }
+
+                app.DoSave();
+            }
+        }
+    }
 }
