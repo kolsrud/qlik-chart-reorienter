@@ -1,33 +1,83 @@
 ﻿using System;
-using System.ComponentModel.Design;
+using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using Qlik.Engine;
+using Qlik.Engine.Communication;
 using Qlik.Sense.Client.Visualizations;
 using Qlik.Sense.Client.Visualizations.Components;
 
 namespace QlikChartReorienter
 {
 	class Program
-	{
-		static void Main(string[] args)
-        {
-            var location = Location.FromUri(@"http:\\localhost");
-			location.AsDirectConnectionToPersonalEdition();
+    {
+        private static StreamWriter _logStreamWriter;
 
-            var appIds = location.AppsWithNameOrDefault("ComboChartReorienter");
+        private static void Write(string message)
+        {
+            Console.Write(message);
+            _logStreamWriter?.Write(message);
+        }
+
+        private static void WriteLine(string message)
+        {
+            Write(message + Environment.NewLine);
+        }
+		
+        static void Main(string[] args)
+        {
+            var now = DateTime.Now;
+            var logFileName = "qlik-chart-reorient-log-" + now.ToString("yyyy-MM-ddTHH-mm-ss") + ".log";
+            Console.WriteLine("Writing to log file: " + logFileName);
+            _logStreamWriter = new StreamWriter(logFileName,false);
+            var commitChanges = false;
+            if (args.Length > 0)
+                commitChanges = args.First() == "commit";
+
+            if (!commitChanges)
+                WriteLine("Dry run only. No changes will be committed.");
+
+            var location = Location.FromUri(@"https:\\localhost");
+            var certs = CertificateManager.LoadCertificateFromStore();
+			location.AsDirectConnection("INTERNAL", "sa_api", certs, false);
+
+            var appIds = location.GetAppIdentifiers().ToArray();
+            WriteLine($"Scanning {appIds.Length} apps...");
+
+            var reoriented = new List<IAppIdentifier>();
+            var n = 0;
             foreach (var appIdentifier in appIds)
             {
-                ReorientForApp(location, appIdentifier);
+                n++;
+                WriteLine($"({n}/{appIds.Length}) - Scanning \"{appIdentifier.AppName}\" ({appIdentifier.AppId})");
+                if (ReorientForApp(location, appIdentifier, commitChanges))
+                    reoriented.Add(appIdentifier);
+            }
+
+            WriteLine($"Reoriented charts in the following {reoriented.Count} apps:");
+            foreach (var appIdentifier in reoriented)
+            {
+                WriteLine($"\t{appIdentifier.AppName} ({appIdentifier.AppId})");
+            }
+
+            if (commitChanges)
+            {
+                WriteLine("*** Changes applied! ***");
+            }
+            else
+            {
+                WriteLine("Dry run only. No changes applied. Use argument \"commit\" to apply changes.");
             }
         }
 
-        private static void ReorientForApp(ILocation location, IAppIdentifier appIdentifier)
+        private static bool ReorientForApp(ILocation location, IAppIdentifier appIdentifier, bool commitChanges)
         {
-            using (var app = location.App(appIdentifier))
+            using (var app = location.App(appIdentifier, session:Session.Random, noData:true))
             {
                 var infos = app.GetAllInfos();
                 var combocharts = infos.Where(i => i.Type == "combochart").ToArray();
-                Console.WriteLine($"Found {combocharts.Length} combo charts");
+                WriteLine($"\t  |- Found {combocharts.Length} combo charts");
+                var modified = 0;
                 foreach (var combochart in combocharts)
                 {
                     var o = app.GetGenericObject(combochart.Id);
@@ -38,13 +88,26 @@ namespace QlikChartReorienter
                     var p = o.GetProperties().As<CombochartProperties>();
                     if (p.Orientation == Orientation.Horizontal)
                     {
-                        Console.WriteLine($"Changing {(string.IsNullOrEmpty(extendsId) ? "chart" : "master object")} to vertical: " + p.Info.Id);
+                        WriteLine($"\t  |- Changing {(string.IsNullOrEmpty(extendsId) ? "chart" : "master object")} to vertical: " + p.Info.Id);
                         p.Orientation = Orientation.Vertical;
-                        // o.SetProperties(p);
+                        if (commitChanges)
+                        {
+                            try
+                            {
+                                o.SetProperties(p);
+                                modified++;
+                            }
+                            catch
+                            {
+                                WriteLine("\t  |- Failed to set properties.");
+                            }
+                        }
                     }
                 }
+                WriteLine($"\t  \\- Modified {modified} combo charts.");
 
-                app.DoSave();
+                // app.DoSave();
+                return modified > 0;
             }
         }
     }
