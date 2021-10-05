@@ -72,43 +72,55 @@ namespace QlikChartReorienter
 
         private static bool ReorientForApp(ILocation location, IAppIdentifier appIdentifier, bool commitChanges)
         {
-            using (var app = location.App(appIdentifier, session:Session.Random, noData:true))
+            try
             {
-                var infos = app.GetAllInfos();
-                var combocharts = infos.Where(i => i.Type == "combochart").ToArray();
-                WriteLine($"\t  |- Found {combocharts.Length} combo charts");
-                var modified = 0;
-                foreach (var combochart in combocharts)
+                using (var app = location.App(appIdentifier, session: Session.Random, noData: true))
                 {
-                    var o = app.GetGenericObject(combochart.Id);
-                    var extendsId = o.Properties.ExtendsId;
-                    if (!string.IsNullOrEmpty(extendsId))
-                        o = app.GetGenericObject(extendsId);
-
-                    var p = o.GetProperties().As<CombochartProperties>();
-                    if (p.Orientation == Orientation.Horizontal)
+                    var infos = app.GetAllInfos();
+                    var combocharts = infos.Where(i => i.Type == "combochart").ToArray();
+                    WriteLine($"\t  |- Found {combocharts.Length} combo charts");
+                    var modified = 0;
+                    foreach (var combochart in combocharts)
                     {
-                        WriteLine($"\t  |- Changing {(string.IsNullOrEmpty(extendsId) ? "chart" : "master object")} to vertical: " + p.Info.Id);
-                        p.Orientation = Orientation.Vertical;
-                        if (commitChanges)
+                        var o = app.GetGenericObject(combochart.Id);
+                        var extendsId = o.Properties.ExtendsId;
+                        if (!string.IsNullOrEmpty(extendsId))
+                            o = app.GetGenericObject(extendsId);
+
+                        var p = o.GetProperties().As<CombochartProperties>();
+                        if (p.Orientation == Orientation.Horizontal)
                         {
-                            try
+                            WriteLine(
+                                $"\t  |- Changing {(string.IsNullOrEmpty(extendsId) ? "chart" : "master object")} to vertical: " +
+                                p.Info.Id);
+                            p.Orientation = Orientation.Vertical;
+                            if (commitChanges)
                             {
-                                o.SetProperties(p);
-                                modified++;
-                            }
-                            catch
-                            {
-                                WriteLine("\t  |- Failed to set properties.");
+                                try
+                                {
+                                    o.SetProperties(p);
+                                    modified++;
+                                }
+                                catch
+                                {
+                                    WriteLine("\t  |- Failed to set properties.");
+                                }
                             }
                         }
                     }
-                }
-                WriteLine($"\t  \\- Modified {modified} combo charts.");
 
-                // app.DoSave();
-                return modified > 0;
+                    WriteLine($"\t  \\- Modified {modified} combo charts.");
+
+                    // app.DoSave();
+                    return modified > 0;
+                }
             }
+            catch (Exception e)
+            {
+                WriteLine("Error encountered: " + e);
+            }
+
+            return false;
         }
     }
 }
