@@ -94,17 +94,22 @@ namespace QlikChartReorienter
                                 $"\t  |- Changing {(string.IsNullOrEmpty(extendsId) ? "chart" : "master object")} to vertical: " +
                                 p.Info.Id);
                             p.Orientation = Orientation.Vertical;
-                            if (commitChanges)
+                            try
                             {
-                                try
+                                if (commitChanges)
                                 {
                                     o.SetProperties(p);
-                                    modified++;
                                 }
-                                catch
-                                {
-                                    WriteLine("\t  |- Failed to set properties.");
+                                else
+                                {  
+                                    WriteLine($"\t  |- Dry run only. No changes applied.");
                                 }
+
+                                modified++;
+                            }
+                            catch
+                            {
+                                WriteLine("\t  |- Failed to set properties.");
                             }
                         }
                     }
