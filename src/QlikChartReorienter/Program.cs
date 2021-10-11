@@ -21,6 +21,7 @@ namespace QlikChartReorienter
         {
             Console.Write(message);
             _logStreamWriter?.Write(message);
+            _logStreamWriter?.Flush();
         }
 
         private static void WriteLine(string message)
