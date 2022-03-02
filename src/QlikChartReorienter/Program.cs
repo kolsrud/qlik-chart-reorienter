@@ -12,10 +12,17 @@ namespace QlikChartReorienter
 {
 	class Program
     {
+        private enum Mode
+        {
+            ComboChartOrientation,
+            ComboChartBarAxis
+        }
+
         private static StreamWriter _logStreamWriter;
         private static bool _commitChanges = false;
         private static bool _scanAllApps = false;
         private static string _scanSpecificAppId = null;
+        private static Mode _mode = Mode.ComboChartOrientation;
 
         private static void Write(string message)
         {
@@ -37,7 +44,21 @@ namespace QlikChartReorienter
 
             _commitChanges = args.Contains("--commit");
             _scanAllApps = args.Contains("--all");
-            _scanSpecificAppId = GetArg(args, "--app");
+            _scanSpecificAppId = GetArgGui(args, "--app");
+            var modeStr = GetArg(args, "--mode");
+            switch (modeStr?.ToLower() ?? Mode.ComboChartOrientation.ToString().ToLower())
+            {
+                case "combochartorientation":
+                    _mode = Mode.ComboChartOrientation;
+                    break;
+                case "combochartbaraxis":
+                    _mode = Mode.ComboChartBarAxis;
+                    break;
+                default:
+                    Error($"Unknown operations mode {modeStr}");
+                    break;
+            }
+
             if (!_scanAllApps && (_scanSpecificAppId == null))
             {
                 Error("Exactly one of the flags --all and --app must be defined.");
@@ -56,31 +77,42 @@ namespace QlikChartReorienter
             PrintUsage();
         }
 
-        private static string GetArg(string[] args, string arg)
+        private static string GetArgGui(string[] args, string argName)
         {
-            var i = Array.IndexOf(args, arg);
-            if (i == -1)
+            var result = GetArg(args, argName);
+            if (result == null)
                 return null;
 
-            if (i == arg.Length - 1)
-            {
-                Error("No argument found for app flag.");
-            }
-
-            var result = args[i + 1];
             if (!Guid.TryParse(result, out _))
             {
-                Error($"Unable to parse argument \"{args[i+1]}\" as Guid.");
+                Error($"Unable to parse argument \"{result}\" as Guid.");
             }
 
             return result;
         }
 
+        private static string GetArg(string[] args, string argName)
+        {
+            var i = Array.IndexOf(args, argName);
+            if (i == -1)
+                return null;
+
+            if (i == args.Length - 1)
+            {
+                Error($"No argument found for flag flag {argName}.");
+            }
+            return args[i + 1];
+        }
+
         static void PrintUsage()
         {
-            Console.WriteLine("Usage:   " + System.AppDomain.CurrentDomain.FriendlyName + " (--all | --app <appId>) [--commit]");
-            Console.WriteLine("Example: " + System.AppDomain.CurrentDomain.FriendlyName + " --all --commit");
-            Console.WriteLine("         " + System.AppDomain.CurrentDomain.FriendlyName + " --app 9183fa90-69f6-4864-862e-d6ff75865fb0 --commit");
+            Console.WriteLine("Usage:    " + System.AppDomain.CurrentDomain.FriendlyName + " (--all | --app <appId>) [--mode <mode>] [--commit]");
+            Console.WriteLine("          <mode> ::= ComboChartOrientation | ComboChartBarAxis");
+            Console.WriteLine("Modes:    ComboChartOrientation - Force combo chart orientations to vertical.");
+            Console.WriteLine("          ComboChartBarAxis     - Force combo chart bar axis to primary.");
+            Console.WriteLine("Examples: " + System.AppDomain.CurrentDomain.FriendlyName + " --all --commit");
+            Console.WriteLine("          " + System.AppDomain.CurrentDomain.FriendlyName + " --app 9183fa90-69f6-4864-862e-d6ff75865fb0 --commit");
+            Console.WriteLine("          " + System.AppDomain.CurrentDomain.FriendlyName + " --all --mode ComboChartBarAxis --commit");
             Environment.Exit(0);
         }
 
@@ -145,13 +177,13 @@ namespace QlikChartReorienter
                     var masterObjectList = app.GetMasterObjectList();
                     var masterComboCharts = masterObjectList.Layout.AppObjectList.Items.Where(i => i.Data.Visualization == "combochart").ToArray();
                     WriteLine($"\t  |- Found {masterComboCharts.Length} master item combo charts.");
-                    var modified = ReorientCharts(app, masterComboCharts.Select(chart => chart.Info), commitChanges);
+                    var modified = ReorientCharts(app, masterComboCharts.Select(chart => chart.Info), _mode, commitChanges);
                     app.DestroyGenericSessionObject(masterObjectList.Id);
 
                     var infos = app.GetAllInfos();
                     var combocharts = infos.Where(i => i.Type == "combochart").ToArray();
                     WriteLine($"\t  |- Found {combocharts.Length} combo charts");
-                    modified += ReorientCharts(app, combocharts, commitChanges);
+                    modified += ReorientCharts(app, combocharts, _mode, commitChanges);
 
                     WriteLine($"\t  \\- Modified {modified} combo charts.");
 
@@ -167,7 +199,7 @@ namespace QlikChartReorienter
             return false;
         }
 
-        private static int ReorientCharts(IApp app, IEnumerable<NxInfo> infos, bool commitChanges)
+        private static int ReorientCharts(IApp app, IEnumerable<NxInfo> infos, Mode mode, bool commitChanges)
         {
             var modified = 0;
             foreach (var combochart in infos)
@@ -177,13 +209,65 @@ namespace QlikChartReorienter
                 if (!string.IsNullOrEmpty(extendsId))
                     o = app.GetGenericObject(extendsId);
 
-                var p = o.GetProperties().As<CombochartProperties>();
-                if (p.Orientation == Orientation.Horizontal)
+                modified += PerformModification(o, mode, commitChanges);
+            }
+
+            return modified;
+        }
+
+        private static int PerformModification(GenericObject o, Mode mode, bool commitChanges)
+        {
+            switch (mode)
+            {
+                case Mode.ComboChartOrientation: return ForceComboChartOrientation(o, commitChanges);
+                case Mode.ComboChartBarAxis: return ForceComboChartBarAxis(o, commitChanges);
+                default:
+                    Error($"No modification method defined for mode {mode}");
+                    return 0;
+            }
+        }
+
+        private static int ForceComboChartOrientation(IGenericObject o, bool commitChanges)
+        {
+            var p = o.GetProperties().As<CombochartProperties>();
+            if (p.Orientation == Orientation.Horizontal)
+            {
+                Write($"\t  |- Changing {(string.IsNullOrEmpty(p.ExtendsId) ? "chart" : "master object")} to vertical: " +  p.Info.Id);
+                p.Orientation = Orientation.Vertical;
+                try
                 {
-                    Write(
-                        $"\t  |- Changing {(string.IsNullOrEmpty(extendsId) ? "chart" : "master object")} to vertical: " +
-                        p.Info.Id);
-                    p.Orientation = Orientation.Vertical;
+                    if (commitChanges)
+                    {
+                        WriteLine("");
+                        o.SetProperties(p);
+                    }
+                    else
+                    {
+                        WriteLine($" (Dry run only. No changes applied.)");
+                    }
+
+                    return 1;
+                }
+                catch
+                {
+                    WriteLine("");
+                    WriteLine("\t  |- Failed to set properties.");
+                }
+            }
+
+            return 0;
+        }
+
+        private static int ForceComboChartBarAxis(IGenericObject o, bool commitChanges)
+        {
+            var p = o.GetProperties().As<CombochartProperties>();
+            var defs = p.HyperCubeDef.Measures.Select(m => m.Def);
+            foreach (var def in defs)
+            {
+                if (def.Series.Type == CombochartSeriesType.Bar && def.Series.Axis != 0)
+                {
+                    Write($"\t  |- Changing {(string.IsNullOrEmpty(p.ExtendsId) ? "chart" : "master object")} bar axis to primary: " + p.Info.Id);
+                    def.Series.Axis = 0;
                     try
                     {
                         if (commitChanges)
@@ -196,7 +280,7 @@ namespace QlikChartReorienter
                             WriteLine($" (Dry run only. No changes applied.)");
                         }
 
-                        modified++;
+                        return 1;
                     }
                     catch
                     {
@@ -206,7 +290,7 @@ namespace QlikChartReorienter
                 }
             }
 
-            return modified;
+            return 0;
         }
     }
 }
