@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security;
 using Qlik.Engine;
 using Qlik.Engine.Communication;
 using Qlik.Sense.Client;
@@ -19,6 +20,9 @@ namespace QlikChartReorienter
         }
 
         private static StreamWriter _logStreamWriter;
+        private static string _url = null;
+        private static string _certs = null;
+        private static SecureString _certPwd = null;
         private static bool _commitChanges = false;
         private static bool _scanAllApps = false;
         private static string _scanSpecificAppId = null;
@@ -35,8 +39,7 @@ namespace QlikChartReorienter
         {
             Write(message + Environment.NewLine);
         }
-
-
+        
         private static void ParseArgs(string[] args)
         {
             if (args.Length == 0)
@@ -44,7 +47,24 @@ namespace QlikChartReorienter
 
             _commitChanges = args.Contains("--commit");
             _scanAllApps = args.Contains("--all");
-            _scanSpecificAppId = GetArgGui(args, "--app");
+            _certs = GetArg(args, "--certs");
+            var certPwd = GetArg(args, "--certPwd");
+            if (certPwd != null)
+            {
+                _certPwd = MakeSecureString(certPwd);
+            }
+
+            _url = GetArg(args, "--url");
+            if (_url == null)
+            {
+                _url = "localhost";
+            }
+            else if (_certs == null)
+            {
+                _certs = ".";
+            }
+
+            _scanSpecificAppId = GetArgGuid(args, "--app");
             var modeStr = GetArg(args, "--mode");
             switch (modeStr?.ToLower() ?? Mode.ComboChartOrientation.ToString().ToLower())
             {
@@ -69,6 +89,16 @@ namespace QlikChartReorienter
             }
         }
 
+        private static SecureString MakeSecureString(string certPwd)
+        {
+            var result = new SecureString();
+            foreach (var c in certPwd)
+            {
+                result.AppendChar(c);
+            }
+            return result;
+        }
+
         private static void Error(string msg)
         {
             Console.WriteLine("--------------------------------------------------------------------------");
@@ -77,7 +107,7 @@ namespace QlikChartReorienter
             PrintUsage();
         }
 
-        private static string GetArgGui(string[] args, string argName)
+        private static string GetArgGuid(string[] args, string argName)
         {
             var result = GetArg(args, argName);
             if (result == null)
@@ -106,13 +136,16 @@ namespace QlikChartReorienter
 
         static void PrintUsage()
         {
-            Console.WriteLine("Usage:    " + System.AppDomain.CurrentDomain.FriendlyName + " (--all | --app <appId>) [--mode <mode>] [--commit]");
-            Console.WriteLine("          <mode> ::= ComboChartOrientation | ComboChartBarAxis");
-            Console.WriteLine("Modes:    ComboChartOrientation - Force combo chart orientations to vertical.");
-            Console.WriteLine("          ComboChartBarAxis     - Force combo chart bar axis to primary.");
-            Console.WriteLine("Examples: " + System.AppDomain.CurrentDomain.FriendlyName + " --all --commit");
-            Console.WriteLine("          " + System.AppDomain.CurrentDomain.FriendlyName + " --app 9183fa90-69f6-4864-862e-d6ff75865fb0 --commit");
-            Console.WriteLine("          " + System.AppDomain.CurrentDomain.FriendlyName + " --all --mode ComboChartBarAxis --commit");
+            var exeName = System.AppDomain.CurrentDomain.FriendlyName;
+            Console.WriteLine($"Usage:    {exeName} (--all | --app <appId>) [--mode <mode>] [--commit]");
+            Console.WriteLine("                                  [--url <url>] [--certs <path>] [--certPwd <pwd>]");
+            Console.WriteLine($"          <mode> ::= ComboChartOrientation | ComboChartBarAxis");
+            Console.WriteLine($"Modes:    ComboChartOrientation - Force combo chart orientations to vertical.");
+            Console.WriteLine($"          ComboChartBarAxis     - Force combo chart bar axis to primary.");
+            Console.WriteLine($"Examples: {exeName} --all --commit");
+            Console.WriteLine($"          {exeName} --url my.server.com --certs C:\\path\\to\\certs --certPwd qwerty --all --commit");
+            Console.WriteLine($"          {exeName} --app 9183fa90-69f6-4864-862e-d6ff75865fb0 --commit");
+            Console.WriteLine($"          {exeName} --all --mode ComboChartBarAxis --commit");
             Environment.Exit(0);
         }
 
@@ -128,8 +161,10 @@ namespace QlikChartReorienter
             if (!_commitChanges)
                 WriteLine("Dry run only. No changes will be committed.");
 
-            var location = Location.FromUri(@"https:\\localhost");
-            var certs = CertificateManager.LoadCertificateFromStore();
+            var location = Location.FromUri(@"https:\\" + _url);
+            var certs = _certs == null ? CertificateManager.LoadCertificateFromStore() :
+                                               _certPwd == null ? CertificateManager.LoadCertificateFromDirectory(_certs) :
+                                               CertificateManager.LoadCertificateFromDirectory(_certs, _certPwd);
             location.AsDirectConnection("INTERNAL", "sa_api", certs, false);
 
             AppIdentifier[] appIds;
