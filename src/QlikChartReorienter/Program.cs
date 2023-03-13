@@ -16,7 +16,8 @@ namespace QlikChartReorienter
         private enum Mode
         {
             ComboChartOrientation,
-            ComboChartBarAxis
+            ComboChartBarAxis,
+            VizlibPivotCalculation
         }
 
         private static StreamWriter _logStreamWriter;
@@ -73,6 +74,9 @@ namespace QlikChartReorienter
                     break;
                 case "combochartbaraxis":
                     _mode = Mode.ComboChartBarAxis;
+                    break;
+                case "vizlibpivotcalculation":
+                    _mode = Mode.VizlibPivotCalculation;
                     break;
                 default:
                     Error($"Unknown operations mode {modeStr}");
@@ -140,8 +144,9 @@ namespace QlikChartReorienter
             Console.WriteLine($"Usage:    {exeName} (--all | --app <appId>) [--mode <mode>] [--commit]");
             Console.WriteLine("                                  [--url <url>] [--certs <path>] [--certPwd <pwd>]");
             Console.WriteLine($"          <mode> ::= ComboChartOrientation | ComboChartBarAxis");
-            Console.WriteLine($"Modes:    ComboChartOrientation - Force combo chart orientations to vertical.");
-            Console.WriteLine($"          ComboChartBarAxis     - Force combo chart bar axis to primary.");
+            Console.WriteLine($"Modes:    ComboChartOrientation  - Force combo chart orientations to vertical.");
+            Console.WriteLine($"          ComboChartBarAxis      - Force combo chart bar axis to primary.");
+            Console.WriteLine($"          VizlibPivotCalculation - Clear 0-value calculation conditions for objects of type VizlibPivotTable.");
             Console.WriteLine($"Examples: {exeName} --all --commit");
             Console.WriteLine($"          {exeName} --url my.server.com --certs C:\\path\\to\\certs --certPwd qwerty --all --commit");
             Console.WriteLine($"          {exeName} --app 9183fa90-69f6-4864-862e-d6ff75865fb0 --commit");
@@ -182,7 +187,7 @@ namespace QlikChartReorienter
                     reoriented.Add(appIdentifier);
             }
 
-            WriteLine($"Reoriented charts in the following {reoriented.Count} apps:");
+            WriteLine($"Reoriented charts in the following {reoriented.Count} app(s):");
             foreach (var appIdentifier in reoriented)
             {
                 WriteLine($"\t{appIdentifier.AppName} ({appIdentifier.AppId})");
@@ -209,18 +214,20 @@ namespace QlikChartReorienter
                         appIdentifier.AppName = app.GetAppProperties().Title;
                     }
 
+                    var filterType = _mode == Mode.VizlibPivotCalculation ? "VizlibPivotTable" : "combochart";
+
                     var masterObjectList = app.GetMasterObjectList();
-                    var masterComboCharts = masterObjectList.Layout.AppObjectList.Items.Where(i => i.Data.Visualization == "combochart").ToArray();
-                    WriteLine($"\t  |- Found {masterComboCharts.Length} master item combo charts.");
-                    var modified = ReorientCharts(app, masterComboCharts.Select(chart => chart.Info), _mode, commitChanges);
+                    var masterObjects = masterObjectList.Layout.AppObjectList.Items.Where(i => i.Data.Visualization == filterType).ToArray();
+                    WriteLine($"\t  |- Found {masterObjects.Length} master item(s) of type {filterType}.");
+                    var modified = ReorientCharts(app, masterObjects.Select(chart => chart.Info), _mode, commitChanges);
                     app.DestroyGenericSessionObject(masterObjectList.Id);
 
                     var infos = app.GetAllInfos();
-                    var combocharts = infos.Where(i => i.Type == "combochart").ToArray();
-                    WriteLine($"\t  |- Found {combocharts.Length} combo charts");
-                    modified += ReorientCharts(app, combocharts, _mode, commitChanges);
+                    var objects = infos.Where(i => i.Type == filterType).ToArray();
+                    WriteLine($"\t  |- Found {objects.Length} object(s) of type {filterType}.");
+                    modified += ReorientCharts(app, objects, _mode, commitChanges);
 
-                    WriteLine($"\t  \\- Modified {modified} combo charts.");
+                    WriteLine($"\t  \\- Modified {modified} object(s) of type {filterType}.");
 
                     // app.DoSave();
                     return modified > 0;
@@ -252,14 +259,51 @@ namespace QlikChartReorienter
 
         private static int PerformModification(GenericObject o, Mode mode, bool commitChanges)
         {
+
             switch (mode)
             {
                 case Mode.ComboChartOrientation: return ForceComboChartOrientation(o, commitChanges);
                 case Mode.ComboChartBarAxis: return ForceComboChartBarAxis(o, commitChanges);
+                case Mode.VizlibPivotCalculation: return ForceVizlibPivotCalculationCondition(o, commitChanges);
                 default:
                     Error($"No modification method defined for mode {mode}");
                     return 0;
             }
+        }
+
+        private static int ForceVizlibPivotCalculationCondition(IGenericObject o, bool commitChanges)
+        {
+            var p = o.GetProperties().As<PivottableProperties>();
+            if (p.HyperCubeDef.CalcCondition?.Cond?.v == "=0" || p.HyperCubeDef.CalcCond?.v == "=0")
+            {
+                Write($"\t  |- Changing {(string.IsNullOrEmpty(p.ExtendsId) ? "chart" : "master object")}. Clearing calculation condition: " +  p.Info.Id);
+                if (p.HyperCubeDef.CalcCondition?.Cond?.v == "=0")
+                    p.HyperCubeDef.CalcCondition = new NxCalcCond();
+                if (p.HyperCubeDef.CalcCond?.v == "=0")
+                    p.HyperCubeDef.CalcCond = new ValueExpr();
+
+                try
+                {
+                    if (commitChanges)
+                    {
+                        WriteLine("");
+                        o.SetProperties(p);
+                    }
+                    else
+                    {
+                        WriteLine($" (Dry run only. No changes applied.)");
+                    }
+
+                    return 1;
+                }
+                catch
+                {
+                    WriteLine("");
+                    WriteLine("\t  |- Failed to set properties.");
+                }
+            }
+
+            return 0;
         }
 
         private static int ForceComboChartOrientation(IGenericObject o, bool commitChanges)
